@@ -1,3 +1,8 @@
 -cp src
+
+-lib haxeparser
+
+-hl fix.hl
+
 -main Main
 
