@@ -56,6 +56,30 @@ class ProjectDiagnostics {
         Sys.println("Processed " + filesProcessed + " files. " + (dryRun ? "Would change " : "Changed ") + filesChanged + " files.");
     }
 
+    public static function dumpStdResolvedTypeMap(hxmlPath:String, outJsonPath:String):Void {
+        var parsed = parseHxml(hxmlPath);
+        var stdRoots = StdConfigMacro.getStdRoots();
+        if (stdRoots == null || stdRoots.length == 0) return;
+
+        var stdFiles = collectAllHxFiles(stdRoots);
+        var metaIndex = buildTypeAndCanonicalMeta(stdRoots, stdFiles, [], stdRoots);
+        var resolvedTypeToCanonical = resolveAmbiguousTypes(metaIndex.typeToCanonicals, metaIndex.canonicalMeta, parsed.targets);
+
+        var keys = new Array<String>();
+        for (k in resolvedTypeToCanonical.keys()) keys.push(k);
+        keys.sort(Reflect.compare);
+
+        var obj:Dynamic = {};
+        for (k in keys) {
+            var v = resolvedTypeToCanonical.get(k);
+            if (v != null) Reflect.setField(obj, k, v);
+        }
+
+        var json = haxe.Json.stringify(obj, null, "  ");
+        sys.io.File.saveContent(outJsonPath, json);
+        Sys.println("Wrote std type mappings to " + outJsonPath + " (" + keys.length + " entries)");
+    }
+
 
     static inline function mdCall(method:String, path:String):Array<String> {
         var fn:Dynamic = Reflect.field(ModuleDiagnostics, method);
@@ -402,6 +426,9 @@ class ProjectDiagnostics {
                         inStd: stdSet.exists(root),
                         inClasspath: cpSet.exists(root)
                     });
+                    if(canonical.contains("File")){
+                      //  trace(canonical + " " + canonicalMeta.get(canonical));
+                    }
                 }
             }
         }
@@ -414,8 +441,8 @@ class ProjectDiagnostics {
         selectedTargets:Array<String>
     ):Map<String, String> {
         var result:Map<String, String> = new Map();
-        var targets = ["hl", "cpp", "cs", "java", "js", "lua", "neko", "php", "python"];
-        var coreStdDirs = ["eval", "haxe", "sys"];
+        var targets = ["eval", "hl", "cpp", "cs", "java", "js", "lua", "neko", "php", "python"];
+        var coreStdDirs = ["haxe", "sys"];
 
         function contains(arr:Array<String>, v:String):Bool {
             for (x in arr) if (x == v) return true; return false;
