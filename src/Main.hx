@@ -1,7 +1,10 @@
-package;
 
 import Diagnostics;
+import FixImports;
+import FixPackages;
+import StripComments;
 import util.ProjectDiagnostics;
+
 
 class Main {
 	static public function main() {

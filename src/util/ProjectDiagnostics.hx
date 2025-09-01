@@ -1,6 +1,7 @@
 package util;
 
 import util.ModuleDiagnostics;
+import util.StdConfigMacro;
 
 using StringTools;
 
@@ -11,32 +12,36 @@ class ProjectDiagnostics {
         if (cpRoots.length == 0) return;
 
         var libRoots = resolveLibClasspaths(parsed.libs);
-        var allRoots = cpRoots.concat(libRoots);
+        var stdRoots = StdConfigMacro.getStdRoots();
+        var allRoots = dedup(cpRoots.concat(libRoots).concat(stdRoots));
+
+        trace("allRoots: " + allRoots);
 
         var allFiles = collectAllHxFiles(allRoots);
+       // trace("allFiles: " + allFiles);
         var classpathFiles = collectAllHxFiles(cpRoots);
 
-        var typeToCanonicals = buildTypeIndex(allRoots, allFiles);
-        var uniqueTypeToCanonical:Map<String, String> = new Map();
-        var seenAmbiguous:Map<String, Bool> = new Map();
-        for (t in typeToCanonicals.keys()) {
-            var list = typeToCanonicals.get(t);
-            var uniq = dedup(list);
-            if (uniq.length == 1) uniqueTypeToCanonical.set(t, uniq[0]); else seenAmbiguous.set(t, true);
-        }
+        var metaIndex = buildTypeAndCanonicalMeta(allRoots, allFiles, cpRoots, stdRoots);
+        var typeToCanonicals = metaIndex.typeToCanonicals;
+        var canonicalMeta = metaIndex.canonicalMeta;
+        var resolvedTypeToCanonical = resolveAmbiguousTypes(typeToCanonicals, canonicalMeta, parsed.targets);
 
         var filesProcessed = 0;
         var filesChanged = 0;
         for (f in classpathFiles) {
+            trace("f: " + f);
             var depTypes:Array<String> = mdCall("getDependentTypes", f);
+            trace("depTypes: " + depTypes);
             var importedNames:Array<String> = mdCall("getImports", f);
+            trace("importedNames: " + importedNames);
             var importedSet:Map<String, Bool> = new Map();
             for (n in importedNames) importedSet.set(n, true);
 
             var toAdd = new Array<String>();
             for (t in depTypes) {
                 if (importedSet.exists(t)) continue;
-                var canonical = uniqueTypeToCanonical.get(t);
+                var canonical = resolvedTypeToCanonical.get(t);
+                trace("trying to match " + t + " to " + canonical);
                 if (canonical == null) continue;
                 toAdd.push(canonical);
             }
@@ -53,9 +58,8 @@ class ProjectDiagnostics {
 
 
     static inline function mdCall(method:String, path:String):Array<String> {
-        var cls:Dynamic = util.ModuleDiagnostics;
-        var fn:Dynamic = Reflect.field(cls, method);
-        var res:Dynamic = Reflect.callMethod(cls, fn, [path]);
+        var fn:Dynamic = Reflect.field(ModuleDiagnostics, method);
+        var res:Dynamic = Reflect.callMethod(ModuleDiagnostics, fn, [path]);
         return cast res;
     }
 
@@ -344,6 +348,7 @@ class ProjectDiagnostics {
         for (name in entries) {
             if (name == "." || name == "..") continue;
             var p = dir + "/" + name;
+            if(isPlatformSpecificStd(p)) continue;
             var isDir = sys.FileSystem.isDirectory(p);
             if (isDir) {
                 walk(p, out, seen);
@@ -356,22 +361,114 @@ class ProjectDiagnostics {
         }
     }
 
-    static function buildTypeIndex(roots:Array<String>, files:Array<String>):Map<String, Array<String>> {
-        var typeToPaths:Map<String, Array<String>> = new Map();
+    static function buildTypeAndCanonicalMeta(
+        roots:Array<String>,
+        files:Array<String>,
+        cpRoots:Array<String>,
+        stdRoots:Array<String>
+    ):{ typeToCanonicals:Map<String, Array<String>>, canonicalMeta:Map<String, { root:String, firstSeg:String, inStd:Bool, inClasspath:Bool }> } {
+        var typeToCanonicals:Map<String, Array<String>> = new Map();
+        var canonicalMeta:Map<String, { root:String, firstSeg:String, inStd:Bool, inClasspath:Bool }> = new Map();
+
+        var cpSet:Map<String, Bool> = new Map();
+        for (r in cpRoots) cpSet.set(r, true);
+        var stdSet:Map<String, Bool> = new Map();
+        for (r in stdRoots) stdSet.set(r, true);
+
         for (f in files) {
             var root = pickBestRootForFile(f, roots);
             if (root == null) continue;
             var mod = moduleInfoFromPath(root, f);
+            var rel = norm(sys.FileSystem.fullPath(f));
+            var rabs = norm(sys.FileSystem.fullPath(root));
+            if (!rabs.endsWith("/")) rabs += "/";
+            var relPath = rel.startsWith(rabs) ? rel.substr(rabs.length) : haxe.io.Path.withoutDirectory(rel);
+            var dir = haxe.io.Path.directory(relPath);
+            var firstSeg = "";
+            if (dir != null && dir != "" && dir != ".") {
+                var parts = dir.split("\\").join("/").split("/");
+                for (p in parts) if (p != null && p != "") { firstSeg = p; break; }
+            }
             var topTypes:Array<String> = mdCall("getModuleLevelFields", f);
             for (t in topTypes) {
                 var canonical = (t == mod.moduleName) ? mod.fullModule : (mod.fullModule + "." + t);
-                var arr = typeToPaths.get(t);
-                if (arr == null) { arr = []; typeToPaths.set(t, arr); }
+                var arr = typeToCanonicals.get(t);
+                if (arr == null) { arr = []; typeToCanonicals.set(t, arr); }
                 arr.push(canonical);
+                if (!canonicalMeta.exists(canonical)) {
+                    canonicalMeta.set(canonical, {
+                        root: root,
+                        firstSeg: firstSeg,
+                        inStd: stdSet.exists(root),
+                        inClasspath: cpSet.exists(root)
+                    });
+                }
             }
         }
-        return typeToPaths;
+        return { typeToCanonicals: typeToCanonicals, canonicalMeta: canonicalMeta };
     }
+
+    static function resolveAmbiguousTypes(
+        typeToCanonicals:Map<String, Array<String>>,
+        canonicalMeta:Map<String, { root:String, firstSeg:String, inStd:Bool, inClasspath:Bool }>,
+        selectedTargets:Array<String>
+    ):Map<String, String> {
+        var result:Map<String, String> = new Map();
+        var targets = ["hl", "cpp", "cs", "java", "js", "lua", "neko", "php", "python"];
+        var coreStdDirs = ["eval", "haxe", "sys"];
+
+        function contains(arr:Array<String>, v:String):Bool {
+            for (x in arr) if (x == v) return true; return false;
+        }
+
+        function priorityOf(canonical:String):Int {
+            var meta = canonicalMeta.get(canonical);
+            if (meta == null) return 5;
+            if (meta.inClasspath) return 1; // p1
+            if (meta.inStd) {
+                var first = meta.firstSeg;
+                if (first == null || first == "") return 2; // p2
+                if (contains(coreStdDirs, first)) return 3; // p3
+                if (contains(targets, first)) {
+                    return contains(selectedTargets, first) ? 4 : 5; // p4 else p5
+                }
+                return 2; // p2
+            }
+            return 5; // p5
+        }
+
+        for (t in typeToCanonicals.keys()) {
+            var list = typeToCanonicals.get(t);
+            if (list == null || list.length == 0) continue;
+            var uniq = dedup(list);
+            var best:String = null;
+            var bestPri = 9999;
+            uniq.sort(Reflect.compare);
+            for (c in uniq) {
+                var pri = priorityOf(c);
+                if (pri < bestPri) { bestPri = pri; best = c; }
+            }
+            if (best != null) result.set(t, best);
+        }
+        return result;
+    }
+
+    
+    // Prefer target-agnostic std module paths in imports by stripping leading
+    // platform-specific std prefixes like "hl._std.", "cpp._std.", etc.
+    static function isPlatformSpecificStd(modulePath:String):Bool {
+        var s = modulePath;
+        var dotStd = "._std.";
+        if(!s.contains(dotStd)) return false;
+        var targets = ["hl", "cpp", "cs", "java", "js", "lua", "neko", "php", "python"];
+        for (target in targets) {
+            if (s.contains(target + dotStd)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
 
     static function pickBestRootForFile(fileAbs:String, roots:Array<String>):String {
         var best:String = null;
@@ -397,16 +494,17 @@ class ProjectDiagnostics {
         var fullModule = pkg == "" ? moduleName : (pkg + "." + moduleName);
         return { packagePath: pkg, moduleName: moduleName, fullModule: fullModule };
     }
-    static function parseHxml(hxmlPath:String):{ classpaths:Map<String, Bool>, libs:Array<String> } {
+    static function parseHxml(hxmlPath:String):{ classpaths:Map<String, Bool>, libs:Array<String>, targets:Array<String> } {
         var cpSet:Map<String, Bool> = new Map();
         var libs = new Array<String>();
+        var targets = new Array<String>();
         var visited:Map<String, Bool> = new Map();
-        parseHxmlInner(norm(hxmlPath), cpSet, libs, visited);
-        return { classpaths: cpSet, libs: libs };
+        parseHxmlInner(norm(hxmlPath), cpSet, libs, targets, visited);
+        return { classpaths: cpSet, libs: libs, targets: dedup(targets) };
     }
 
-    static function parseHxmlInner(hxmlPath:String, cpSet:Map<String, Bool>, libs:Array<String>, visited:Map<String, Bool>):Void {
-        var abs = norm(hxmlPath);
+    static function parseHxmlInner(hxmlPath:String, cpSet:Map<String, Bool>, libs:Array<String>, targets:Array<String>, visited:Map<String, Bool>):Void {
+        var abs = norm(sys.FileSystem.fullPath(hxmlPath));
         if (visited.exists(abs)) return;
         visited.set(abs, true);
         if (!sys.FileSystem.exists(abs)) return;
@@ -422,7 +520,7 @@ class ProjectDiagnostics {
                 if (inc.length == 0) { if (i >= tokens.length) break; inc = tokens[i++]; }
                 var incPath = inc;
                 if (!haxe.io.Path.isAbsolute(incPath)) incPath = haxe.io.Path.normalize(haxe.io.Path.join([baseDir, incPath]));
-                parseHxmlInner(norm(incPath), cpSet, libs, visited);
+                parseHxmlInner(norm(incPath), cpSet, libs, targets, visited);
                 continue;
             }
             if (tok == "-cp" || tok == "-p" || tok == "--class-path") {
@@ -439,6 +537,21 @@ class ProjectDiagnostics {
                 var libName = tokens[i++];
                 libs.push(libName);
                 continue;
+            }
+            // Capture targets
+            switch (tok) {
+                case "-js": if (i < tokens.length) { i++; targets.push("js"); } continue;
+                case "-hl": if (i < tokens.length) { i++; targets.push("hl"); } continue;
+                case "-neko": if (i < tokens.length) { i++; targets.push("neko"); } continue;
+                case "-php": if (i < tokens.length) { i++; targets.push("php"); } continue;
+                case "-swf": if (i < tokens.length) { i++; /*flash*/ } continue;
+                case "-as3": if (i < tokens.length) { i++; /*as3*/ } continue;
+                case "-cpp": if (i < tokens.length) { i++; targets.push("cpp"); } continue;
+                case "-cs": if (i < tokens.length) { i++; targets.push("cs"); } continue;
+                case "-java": if (i < tokens.length) { i++; targets.push("java"); } continue;
+                case "-python": if (i < tokens.length) { i++; targets.push("python"); } continue;
+                case "-lua": if (i < tokens.length) { i++; targets.push("lua"); } continue;
+                default:
             }
             switch (tok) {
                 case "-resource" | "-r" | "--resource" | "-D" | "--define" | "-js" | "-hl" | "-neko" | "-php" | "-swf" | "-as3" | "-cpp" | "-cs" | "-java" | "-python" | "-lua" | "-main" | "-m" | "-cmd" | "-dce" | "-swf-version" | "-swf-header" | "-xml" | "-json" | "-hxml":
