@@ -3,6 +3,10 @@ package;
 import sys.io.File;
 import sys.FileSystem;
 import haxe.io.Path;
+import Map;
+import StringTools;
+import Sys;
+
 using StringTools;
 
 class FixPackages {

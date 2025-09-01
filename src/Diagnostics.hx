@@ -2,6 +2,8 @@ package;
 
 import util.ModuleDiagnostics;
 import sys.FileSystem;
+import Sys;
+
 
 class Diagnostics {
 	public static function run(args:Array<String>) {

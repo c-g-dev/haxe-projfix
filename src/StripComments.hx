@@ -3,6 +3,9 @@ package;
 import sys.io.File;
 import sys.FileSystem;
 import haxe.io.Path;
+import Map;
+import Sys;
+
 
 class StripComments {
 	static public function main() {
