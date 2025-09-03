@@ -268,33 +268,67 @@ class FixPackagePosition {
 
     static function parseExistingPackage(s:String):{ has:Bool, start:Int, end:Int, name:String, headerEnd:Int } {
         var headerEnd = skipWSAndComments(s, 0);
-        var i = headerEnd;
+        var i = 0;
         var len = s.length;
         var has = false;
-        var start = i;
-        var end = i;
+        var start = 0;
+        var end = 0;
         var name:String = null;
 
-        if (i + 7 <= len && s.substr(i, 7) == "package") {
-            var after = i + 7;
-            if (after >= len || isWS(s.charAt(after)) || s.charAt(after) == ";") {
-                while (after < len && isWS(s.charAt(after))) after++;
-                if (after < len && s.charAt(after) == ";") {
-                    has = true;
-                    start = i;
-                    end = after + 1;
-                    name = "";
-                } else {
-                    var semi = s.indexOf(";", after);
-                    if (semi != -1) {
-                        var raw = s.substring(after, semi);
+        while (i < len) {
+            var ch = s.charAt(i);
+
+            if (i + 1 < len && ch == "/" && s.charAt(i + 1) == "/") {
+                while (i < len && s.charAt(i) != "\n") i++;
+                i++;
+                continue;
+            }
+            if (i + 1 < len && ch == "/" && s.charAt(i + 1) == "*") {
+                var endC = s.indexOf("*/", i + 2);
+                if (endC == -1) break;
+                i = endC + 2;
+                continue;
+            }
+            if (ch == '"' || ch == "'") {
+                var q = ch;
+                i++;
+                while (i < len) {
+                    var c = s.charAt(i);
+                    if (c == "\\") { i += 2; continue; }
+                    if (c == q) { i++; break; }
+                    i++;
+                }
+                continue;
+            }
+
+            if (i + 7 <= len && s.substr(i, 7) == "package") {
+                var prev = i == 0 ? "" : s.charAt(i - 1);
+                var prevOk = i == 0 || !(prev >= "A" && prev <= "Z") && !(prev >= "a" && prev <= "z") && !(prev >= "0" && prev <= "9") && prev != "_";
+                var after = i + 7;
+                var next = after < len ? s.charAt(after) : "";
+                var nextOk = next == ";" || isWS(next);
+                if (prevOk && nextOk) {
+                    while (after < len && isWS(s.charAt(after))) after++;
+                    if (after < len && s.charAt(after) == ";") {
                         has = true;
                         start = i;
-                        end = semi + 1;
-                        name = raw.trim();
+                        end = after + 1;
+                        name = "";
+                        break;
+                    } else {
+                        var semi = s.indexOf(";", after);
+                        if (semi != -1) {
+                            var raw = s.substring(after, semi);
+                            has = true;
+                            start = i;
+                            end = semi + 1;
+                            name = raw.trim();
+                            break;
+                        }
                     }
                 }
             }
+            i++;
         }
         return { has: has, start: start, end: end, name: name, headerEnd: headerEnd };
     }
