@@ -2,6 +2,8 @@
 
 -lib haxeparser
 
+-resource std-type-map.json@std_type_map
+
 -hl fix.hl
 
 -main Main

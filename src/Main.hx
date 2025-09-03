@@ -5,6 +5,8 @@ import FixPackages;
 import FixPackagePosition;
 import StripComments;
 import util.ProjectDiagnostics;
+import Sys;
+
 
 
 class Main {
@@ -26,8 +28,8 @@ class Main {
 				}
 				var hxml = rest[0];
 				var dryRun = rest.indexOf("--dry-run") != -1 || rest.indexOf("-n") != -1;
-				//ProjectDiagnostics.autoImport(hxml, dryRun);
-				util.ProjectDiagnostics.dumpStdResolvedTypeMap("build.hxml", "std-type-map.json");
+				ProjectDiagnostics.autoImport(hxml, dryRun);
+				//util.ProjectDiagnostics.dumpStdResolvedTypeMap("build.hxml", "std-type-map.json");
 			case "fix-imports":
 				FixImports.run(rest);
 			case "fix-packages":

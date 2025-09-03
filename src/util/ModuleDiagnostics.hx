@@ -5,6 +5,9 @@ import haxe.ds.StringMap;
 import haxeparser.Data;
 import haxeparser.HaxeParser;
 import byte.ByteData;
+import Map;
+import Reflect;
+
 // Avoid importing haxe.macro.Expr to prevent AbstractFlag name conflicts
 
 private typedef Module = {

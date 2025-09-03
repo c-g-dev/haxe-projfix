@@ -2,6 +2,15 @@ package util;
 
 import util.ModuleDiagnostics;
 import util.StdConfigMacro;
+import haxe.Resource;
+import haxe.Json;
+import Map;
+import Reflect;
+import Sys;
+import Std;
+
+
+
 
 using StringTools;
 
@@ -12,28 +21,23 @@ class ProjectDiagnostics {
         if (cpRoots.length == 0) return;
 
         var libRoots = resolveLibClasspaths(parsed.libs);
-        var stdRoots = StdConfigMacro.getStdRoots();
-        var allRoots = dedup(cpRoots.concat(libRoots).concat(stdRoots));
-
-        trace("allRoots: " + allRoots);
+        var allRoots = dedup(cpRoots.concat(libRoots));
 
         var allFiles = collectAllHxFiles(allRoots);
        // trace("allFiles: " + allFiles);
         var classpathFiles = collectAllHxFiles(cpRoots);
 
-        var metaIndex = buildTypeAndCanonicalMeta(allRoots, allFiles, cpRoots, stdRoots);
+        var metaIndex = buildTypeAndCanonicalMeta(allRoots, allFiles, cpRoots, []);
         var typeToCanonicals = metaIndex.typeToCanonicals;
         var canonicalMeta = metaIndex.canonicalMeta;
+        mergeEmbeddedStdTypeMap(typeToCanonicals, canonicalMeta);
         var resolvedTypeToCanonical = resolveAmbiguousTypes(typeToCanonicals, canonicalMeta, parsed.targets);
 
         var filesProcessed = 0;
         var filesChanged = 0;
         for (f in classpathFiles) {
-            trace("f: " + f);
             var depTypes:Array<String> = mdCall("getDependentTypes", f);
-            trace("depTypes: " + depTypes);
             var importedNames:Array<String> = mdCall("getImports", f);
-            trace("importedNames: " + importedNames);
             var importedSet:Map<String, Bool> = new Map();
             for (n in importedNames) importedSet.set(n, true);
 
@@ -41,7 +45,6 @@ class ProjectDiagnostics {
             for (t in depTypes) {
                 if (importedSet.exists(t)) continue;
                 var canonical = resolvedTypeToCanonical.get(t);
-                trace("trying to match " + t + " to " + canonical);
                 if (canonical == null) continue;
                 toAdd.push(canonical);
             }
@@ -57,24 +60,12 @@ class ProjectDiagnostics {
     }
 
     public static function dumpStdResolvedTypeMap(hxmlPath:String, outJsonPath:String):Void {
-        var parsed = parseHxml(hxmlPath);
-        var stdRoots = StdConfigMacro.getStdRoots();
-        if (stdRoots == null || stdRoots.length == 0) return;
-
-        var stdFiles = collectAllHxFiles(stdRoots);
-        var metaIndex = buildTypeAndCanonicalMeta(stdRoots, stdFiles, [], stdRoots);
-        var resolvedTypeToCanonical = resolveAmbiguousTypes(metaIndex.typeToCanonicals, metaIndex.canonicalMeta, parsed.targets);
-
-        var keys = new Array<String>();
-        for (k in resolvedTypeToCanonical.keys()) keys.push(k);
+        var s = haxe.Resource.getString("std_type_map");
+        if (s == null) return;
+        var obj:Dynamic = haxe.Json.parse(s);
+        var keys = Reflect.fields(obj);
         keys.sort(Reflect.compare);
-
-        var obj:Dynamic = {};
-        for (k in keys) {
-            var v = resolvedTypeToCanonical.get(k);
-            if (v != null) Reflect.setField(obj, k, v);
-        }
-
+        // Re-stringify with indentation to keep output stable
         var json = haxe.Json.stringify(obj, null, "  ");
         sys.io.File.saveContent(outJsonPath, json);
         Sys.println("Wrote std type mappings to " + outJsonPath + " (" + keys.length + " entries)");
@@ -121,7 +112,7 @@ class ProjectDiagnostics {
         if (needsLeadingNl) sb.add(nl);
         for (c in toInsert) sb.add("import " + c + ";" + nl);
         var mid = sb.toString();
-        var newContent = prefix + mid + suffix;
+        var newContent = prefix + "\n" + mid + suffix;
         if (!dryRun) sys.io.File.saveContent(filePath, newContent);
         return { changed: true, addedCount: toInsert.length };
     }
@@ -433,6 +424,29 @@ class ProjectDiagnostics {
             }
         }
         return { typeToCanonicals: typeToCanonicals, canonicalMeta: canonicalMeta };
+    }
+
+    static function mergeEmbeddedStdTypeMap(
+        typeToCanonicals:Map<String, Array<String>>,
+        canonicalMeta:Map<String, { root:String, firstSeg:String, inStd:Bool, inClasspath:Bool }>
+    ):Void {
+        var s = haxe.Resource.getString("std_type_map");
+        if (s == null || s.length == 0) return;
+        var obj:Dynamic = haxe.Json.parse(s);
+        var fields = Reflect.fields(obj);
+        for (t in fields) {
+            var canonical:Null<String> = Std.string(Reflect.field(obj, t));
+            if (canonical == null) continue;
+            var arr = typeToCanonicals.get(t);
+            if (arr == null) { arr = []; typeToCanonicals.set(t, arr); }
+            arr.push(canonical);
+            if (!canonicalMeta.exists(canonical)) {
+                var firstSeg = "";
+                var dotIdx = canonical.indexOf(".");
+                if (dotIdx > 0) firstSeg = canonical.substr(0, dotIdx);
+                canonicalMeta.set(canonical, { root: "std", firstSeg: firstSeg, inStd: true, inClasspath: false });
+            }
+        }
     }
 
     static function resolveAmbiguousTypes(
