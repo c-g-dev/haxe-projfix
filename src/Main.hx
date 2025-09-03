@@ -2,6 +2,7 @@
 import Diagnostics;
 import FixImports;
 import FixPackages;
+import FixPackagePosition;
 import StripComments;
 import util.ProjectDiagnostics;
 
@@ -31,6 +32,8 @@ class Main {
 				FixImports.run(rest);
 			case "fix-packages":
 				FixPackages.run(rest);
+			case "fix-package-position":
+				FixPackagePosition.run(rest);
 			case "strip-comments":
 				StripComments.run(rest);
 			case "diagnose":
@@ -52,7 +55,7 @@ class Main {
 	static function findCommandIndex(args:Array<String>):Int {
 		for (i in 0...args.length) {
 			var a = args[i];
-			if (a == "auto-imports" || a == "fix-imports" || a == "fix-packages" || a == "strip-comments" || a == "diagnose" || a == "fix-all") return i;
+			if (a == "auto-imports" || a == "fix-imports" || a == "fix-packages" || a == "fix-package-position" || a == "strip-comments" || a == "diagnose" || a == "fix-all") return i;
 		}
 		return -1;
 	}
@@ -65,6 +68,7 @@ class Main {
 		Sys.println("  auto-imports  path/to/project.hxml [--dry-run|-n]");
 		Sys.println("  fix-imports   path/to/project.hxml [--dry-run|-n]");
 		Sys.println("  fix-packages  path/to/project.hxml [--dry-run|-n]");
+		Sys.println("  fix-package-position path/to/project.hxml [--dry-run|-n]");
 		Sys.println("  strip-comments path/to/project.hxml [--dry-run|-n]");
 		Sys.println("  diagnose      path/to/File.hx                # print imports and dependent types");
 		Sys.println("  fix-all       path/to/project.hxml [--dry-run|-n]  # runs packages then imports");
